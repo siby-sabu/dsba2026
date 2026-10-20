@@ -1,0 +1,29 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/dsba/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+  "python.linting.enabled": true,
+  "python.linting.flake8Enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.formatting.provider": "black",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.DS_Store": true
+  },
+  "files.watcherExclude": {
+    "**/data/processed/**": true,
+    "**/data/features/**": true,
+    "**/models/**": true
+  }
+}

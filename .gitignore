@@ -155,6 +155,7 @@ activemq-data/
 .venv
 env/
 venv/
+dsba/
 ENV/
 env.bak/
 venv.bak/
@@ -218,3 +219,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific directories
+data/processed/
+data/features/
+models/*.pkl
+models/*.h5
+models/*.joblib
+
+# Claude Code session files
+.claude/
+
+# IDE
+.idea/
+# Note: .vscode/ is tracked for project configuration
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Note: .md files (CLAUDE.md, README.md, SETUP.md) are tracked in git
