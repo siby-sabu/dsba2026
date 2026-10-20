@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**dsba2026** is an M.Tech agricultural analytics project focused on crop yield prediction and optimization for India. The project analyzes 26 years of crop production data (1997-2023) combined with weather and vegetation data to build predictive models and recommendation systems.
+**dsba2026** is an M.Tech agricultural analytics project focused on crop yield prediction and optimization for India. The project analyzes 10 years of crop production data (2016-2023) combined with weather and vegetation data to build predictive models and recommendation systems.
 
 **Current Phase:** Moving from planning to Exploratory Data Analysis (EDA)
 
@@ -137,9 +137,9 @@ Follow dimensional modeling pattern:
 ### Environment Setup
 ```bash
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# venv\Scripts\activate  # On Windows
+python3 -m venv dsba
+source dsba/bin/activate  # On macOS/Linux
+# dsba\Scripts\activate  # On Windows
 
 # Install dependencies
 pip install -r requirements.txt
