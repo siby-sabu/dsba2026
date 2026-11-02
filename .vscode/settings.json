@@ -10,8 +10,8 @@
   "python.testing.pytestArgs": [
     "tests"
   ],
-  "python.linting.enabled": true,
-  "python.linting.flake8Enabled": true,
+  "python.linting.enabled": false,
+  "python.linting.flake8Enabled": false,
   "python.linting.pylintEnabled": false,
   "python.formatting.provider": "black",
   "editor.formatOnSave": true,
@@ -28,5 +28,28 @@
     "**/data/processed/**": true,
     "**/data/features/**": true,
     "**/models/**": true
-  }
+  },
+
+  // Python formatting
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    }
+  },
+
+  // Jupyter notebook formatting
+  "notebook.formatOnSave.enabled": true,
+  "notebook.codeActionsOnSave": {
+    "notebook.source.formatDocument": true
+  },
+  "[jupyter]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+
+  // Black-specific settings
+  "black-formatter.args": [
+    "--line-length=88"
+  ]
 }
