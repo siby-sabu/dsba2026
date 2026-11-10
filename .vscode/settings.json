@@ -51,5 +51,8 @@
   // Black-specific settings
   "black-formatter.args": [
     "--line-length=88"
-  ]
+  ],
+  "editor.guides.indentation": true,
+  "editor.guides.bracketPairs": true,
+
 }
