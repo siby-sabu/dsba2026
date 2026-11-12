@@ -25,7 +25,7 @@
 
 ### Purpose
 Transform descriptive temporal analysis into **actionable ML features** and **agricultural insights** for crop yield prediction. Replace generic visualizations with analyses that:
-- Generate 15+ engineered features for ML models
+- Generate 20+ ML-ready features (10 pre-computed + temporal + spatial + interactions)
 - Identify underperforming districts requiring intervention
 - Understand yield-weather-vegetation relationships
 - Detect crop expansion/contraction signals
@@ -45,40 +45,105 @@ Transform descriptive temporal analysis into **actionable ML features** and **ag
 
 ## Data Sources
 
-### 1. Crop Yield Dataset
-- **File:** `data/processed/crop_yield1.pkl` + `crop_yield2.pkl`
-- **Rows:** 357,144 (after removing NaN production)
-- **Coverage:** 26 states, 489 districts, 1997-2023
+### Three-Table Architecture (Post-Consolidation)
+
+The project now uses a **dimensional star schema** with pre-computed features, simplifying feature engineering by ~40%:
+
+### 1. fact_seasonal_crop (Primary Table for ML)
+- **File:** `data/processed/fact_seasonal_crop_spark.parquet`
+- **Rows:** 93,262 (crop yields with aggregated weather/vegetation features)
+- **Temporal Coverage:** 
+  - **Crop data:** 2016-2023 (8 years)
+  - **Weather features:** 93.6% coverage (2016-2023 where precipitation data available)
+  - **NDVI features:** 99.0% coverage (2016-2023)
+- **Spatial Coverage:** 25 states, 407 districts, 62 crops
+- **Seasons:** Kharif, Rabi, Summer, Autumn, Winter, Whole Year, Total
 - **Key Columns:**
-  - `year` (datetime64), `state`, `district`, `crop_name`, `season` (categories)
-  - `area` (hectares), `production` (tonnes), `yield` (t/ha)
-  - `season_start_month`, `season_end_month`, `season_months`
+  - **Identifiers:** `state`, `district`, `crop_year` (int), `crop_name`, `crop_type`, `season`
+  - **Crop Metrics:** `area` (ha), `production` (tonnes), `yield` (t/ha)
+  - **Season Info:** `season_start_month`, `season_end_month`
+  - **✨ Pre-Computed Weather (4 features):**
+    - `seasonal_precip_total` - Total rainfall during crop season (mm) - **93.6% coverage**
+    - `seasonal_precip_avg` - Average monthly rainfall (mm) - **93.6% coverage**
+    - `seasonal_precip_max` - Peak monthly rainfall (mm) - **93.6% coverage**
+    - `rainy_days` - Count of months with >2.5mm rain - **100% coverage**
+  - **✨ Pre-Computed Vegetation (6 features):**
+    - `seasonal_ndvi_mean` - Mean NDVI across season - **99.0% coverage**
+    - `seasonal_ndvi_min` - Minimum NDVI value - **99.0% coverage**
+    - `seasonal_ndvi_max` - Maximum NDVI value - **99.0% coverage**
+    - `early_season_ndvi` - NDVI in first third of season - **99.0% coverage**
+    - `mid_season_ndvi` - NDVI in middle third - **99.0% coverage**
+    - `late_season_ndvi` - NDVI in last third - **99.0% coverage**
+  - **✨ Pre-Computed Geography (2 features):**
+    - `centroid_lat` - District centroid latitude - **100% coverage**
+    - `centroid_lon` - District centroid longitude - **100% coverage**
 
-### 2. Precipitation Dataset
-- **File:** `data/processed/precipitation.pkl`
-- **Rows:** 58,680
-- **Granularity:** Monthly by state/district
-- **Key Columns:** `state`, `district`, `year`, `month`, `precipitation_mm`
+**Loading Pattern:**
+```python
+# Single consolidated Parquet file with 10 pre-computed features
+import pandas as pd
 
-### 3. Vegetation Dataset
-- **File:** `data/processed/vegetation.pkl`
-- **Rows:** 124,189
-- **Granularity:** Monthly (aggregated from 16-day composites)
-- **Key Columns:**
-  - `state`, `district`, `year`, `month`, `date`
-  - `raw_ndvi_mean` (Normalized Difference Vegetation Index)
-  - `valid_crop_fraction` (data quality indicator, 0-1)
-  - `quality_status` (categorical)
+fact_seasonal_crop = pd.read_parquet('data/processed/fact_seasonal_crop_spark.parquet')
 
-### 4. Geography Dataset
-- **File:** `data/processed/geography.pkl`
-- **Rows:** 666,919
-- **Purpose:** District boundary data (for mapping, not features)
+# 93,262 rows with weather, NDVI, and coordinates ready to use!
+print(f"Loaded {len(fact_seasonal_crop):,} records")
+print(f"Year range: {fact_seasonal_crop['crop_year'].min()}-{fact_seasonal_crop['crop_year'].max()}")
+print(f"Coverage: {fact_seasonal_crop['state'].nunique()} states, {fact_seasonal_crop['district'].nunique()} districts")
+```
+
+### 2. fact_monthly_climate (Time-Series Analysis)
+- **File:** `data/processed/fact_monthly_climate_spark.parquet`
+- **Rows:** 94,141 (monthly weather + vegetation combined)
+- **Coverage:** 2016-2026 (11 years), 26 states, 412 districts
+- **Purpose:** Monthly trend analysis, early warning systems, seasonal decomposition
+- **Key Columns:** `state`, `district`, `year`, `month`, `date`, `precipitation_mm`, `raw_ndvi_mean`, `crop_area_km2`, `valid_crop_area_km2`, `valid_crop_fraction`, `quality_status`
+- **Data Quality:** 100% coverage for all weather and NDVI metrics
+
+### 3. dim_districts (Geographic Dimension)
+- **File:** `data/processed/dim_districts_spark.parquet`
+- **Rows:** 515 (one per district)
+- **Coverage:** 26 states, 511 unique districts
+- **Purpose:** District metadata, spatial analysis, coordinate lookups
+- **Key Columns:** `district_id`, `state`, `district`, `centroid_lat`, `centroid_lon`
 
 ### Data Quality Notes
-- **NDVI Monsoon Sparsity:** Only 13-27% usable in July-August (cloud cover) vs 83% in April
-- **Coverage:** 34,268 of 66,690 district-months have both rainfall AND usable NDVI
+
+#### Temporal Coverage
+- **Consolidated table:** 2016-2023 only (where weather + vegetation + crops overlap)
+- **Original crop data:** 1997-2023 (older years excluded due to no weather/NDVI data)
+
+#### Feature Coverage
+- **Precipitation:** 93.6% coverage (6.4% missing)
+- **NDVI:** 99.0% coverage (1.0% missing)
+- **Geography:** 100% coverage
+
+#### Why 6.4% Missing Precipitation Data?
+**26 districts** in crop data have **NO precipitation data** in the source climate dataset:
+- **Spatial gap:** These districts were not covered in the original precipitation data collection
+- **Consistent across all years:** Each of these 26 districts has 0% coverage (not just specific years)
+- **Most affected states:** 
+  - Tamil Nadu (5 districts missing): Theni, Thiruvarur, Kanniyakumari, Kancheepuram, Thiruvallur
+  - Uttar Pradesh (6 districts missing): Ambedkar Nagar, Ghazipur, Rae Bareli, Sant Kabir Nagar, etc.
+  - Karnataka, Bihar, Jharkhand, Chhattisgarh (1-2 districts each)
+
+**Impact:** 5,939 crop records (6.4%) across all years have `seasonal_precip_*` = null
+
+#### Handling Missing Data
+- **For ML models:** Use imputation (state/season average) or drop these records
+- **For analysis:** Filter to complete cases: `fact_seasonal_crop[fact_seasonal_crop['seasonal_precip_total'].notna()]`
+- **Coverage remains high:** 87,323 records with complete weather data (93.6%)
+
+#### Other Notes
+- **Year-Wrapping Handled:** Rabi season (Nov-Mar) automatically spans year boundary in pre-computed features
 - **Categorical Columns:** Always use `observed=True` in groupby operations
+
+### Key Benefits
+✨ **10 features pre-computed** - No manual weather/NDVI aggregation  
+🎯 **Single Parquet file** - `fact_seasonal_crop_spark.parquet` contains everything  
+✅ **Year-wrapping handled** - Rabi season logic transparent  
+📍 **Coordinates included** - No separate geography merge  
+⏱️ **40% faster** - Focus on ML features, not data wrangling  
+📊 **Excellent coverage** - 93-99% feature availability vs. raw monthly data
 
 ---
 
@@ -115,69 +180,98 @@ Transform descriptive temporal analysis into **actionable ML features** and **ag
 
 #### Implementation
 
-**Step 1: Create Lagged Features**
+**Step 1: Load Data**
 ```python
 import pandas as pd
+import numpy as np
+
+# Load consolidated table with pre-computed features
+fact_seasonal_crop = pd.concat([
+    pd.read_pickle('data/processed/fact_seasonal_crop1.pkl'),
+    pd.read_pickle('data/processed/fact_seasonal_crop2.pkl')
+], ignore_index=True)
+
+print(f"Loaded {len(fact_seasonal_crop):,} rows")
+print(f"Weather features: {fact_seasonal_crop['seasonal_precip_total'].notna().mean():.1%} coverage")
+```
+
+**Step 2: Create Lagged Features**
+```python
+# Sort by location+crop+time
+fact_seasonal_crop = fact_seasonal_crop.sort_values(
+    ['state', 'district', 'crop_name', 'season', 'crop_year']
+)
+
+# Create 1, 2, 3-year lags using groupby + shift
+for lag in [1, 2, 3]:
+    fact_seasonal_crop[f'yield_lag{lag}'] = fact_seasonal_crop.groupby(
+        ['state', 'district', 'crop_name', 'season']
+    )['yield'].shift(lag)
+
+# Calculate year-over-year change rate
+fact_seasonal_crop['yield_change_1yr'] = (
+    (fact_seasonal_crop['yield'] - fact_seasonal_crop['yield_lag1']) / 
+    fact_seasonal_crop['yield_lag1']
+)
+
+# 3-year rolling mean (smoothed trend)
+fact_seasonal_crop['yield_rolling_mean_3yr'] = fact_seasonal_crop.groupby(
+    ['state', 'district', 'crop_name', 'season']
+)['yield'].transform(lambda x: x.rolling(window=3, min_periods=1).mean())
+
+print("✓ Lagged features created")
+```
+
+**PySpark Alternative (for larger datasets):**
+```python
 from pyspark.sql.window import Window
 import pyspark.sql.functions as F
 
 # Define window: partition by location+crop, order by time
-window = Window.partitionBy('state', 'district', 'crop_name', 'season').orderBy('year')
+window = Window.partitionBy('state', 'district', 'crop_name', 'season').orderBy('crop_year')
 
 # Create 1, 2, 3-year lags
-crop_yield_df = crop_yield_df.withColumn('yield_lag1', F.lag('yield', 1).over(window))
-crop_yield_df = crop_yield_df.withColumn('yield_lag2', F.lag('yield', 2).over(window))
-crop_yield_df = crop_yield_df.withColumn('yield_lag3', F.lag('yield', 3).over(window))
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_lag1', F.lag('yield', 1).over(window))
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_lag2', F.lag('yield', 2).over(window))
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_lag3', F.lag('yield', 3).over(window))
 
 # Calculate year-over-year change rate
-crop_yield_df = crop_yield_df.withColumn('yield_change_1yr', 
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_change_1yr', 
     (F.col('yield') - F.col('yield_lag1')) / F.col('yield_lag1'))
 
-# 3-year rolling mean (smoothed trend)
-crop_yield_df = crop_yield_df.withColumn('yield_rolling_mean_3yr',
+# 3-year rolling mean
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_rolling_mean_3yr',
     F.mean('yield').over(window.rowsBetween(-2, 0)))
 ```
 
-**Pandas Alternative (for smaller datasets):**
-```python
-# Sort by location+crop+time
-crop_yield_df = crop_yield_df.sort_values(['state', 'district', 'crop_name', 'season', 'year'])
-
-# Create lags using groupby + shift
-for lag in [1, 2, 3]:
-    crop_yield_df[f'yield_lag{lag}'] = crop_yield_df.groupby(
-        ['state', 'district', 'crop_name', 'season']
-    )['yield'].shift(lag)
-
-# Calculate change rate
-crop_yield_df['yield_change_1yr'] = (
-    (crop_yield_df['yield'] - crop_yield_df['yield_lag1']) / crop_yield_df['yield_lag1']
-)
-
-# Rolling mean
-crop_yield_df['yield_rolling_mean_3yr'] = crop_yield_df.groupby(
-    ['state', 'district', 'crop_name', 'season']
-)['yield'].rolling(window=3, min_periods=1).mean().reset_index(drop=True)
-```
-
-**Step 2: Autocorrelation Analysis**
+**Step 3: Autocorrelation Analysis**
 ```python
 import matplotlib.pyplot as plt
 from statsmodels.graphics.tsaplots import plot_acf
 
 # Calculate autocorrelation by crop type
-top_crops = crop_yield_df.groupby('crop_name')['area'].sum().nlargest(5).index
+top_crops = fact_seasonal_crop.groupby('crop_name', observed=True)['area'].sum().nlargest(5).index
 
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 axes = axes.flatten()
 
 for idx, crop in enumerate(top_crops):
-    crop_data = crop_yield_df[crop_yield_df['crop_name'] == crop]['yield'].dropna()
+    crop_data = fact_seasonal_crop[
+        fact_seasonal_crop['crop_name'] == crop
+    ]['yield'].dropna()
     plot_acf(crop_data, lags=5, ax=axes[idx], title=f'{crop} Yield Autocorrelation')
+    axes[idx].set_xlabel('Lag (years)')
+    axes[idx].set_ylabel('Autocorrelation')
 
+axes[-1].axis('off')  # Hide extra subplot
+
+plt.suptitle('Yield Persistence by Crop Type\n(Higher correlation = more predictable)', 
+             fontsize=14, fontweight='bold', y=1.02)
 plt.tight_layout()
 plt.savefig('figures/01_yield_autocorrelation.png', dpi=300, bbox_inches='tight')
 plt.show()
+
+print("✓ Visualization saved: 01_yield_autocorrelation.png")
 ```
 
 #### ML Features Generated
@@ -202,12 +296,23 @@ plt.show()
 #### Data Quality Checks
 ```python
 # Check for NaN propagation (first 3 years will have missing lags)
-print("Missing lag1 values:", crop_yield_df['yield_lag1'].isna().sum())
+missing_lag1 = fact_seasonal_crop['yield_lag1'].isna().sum()
+missing_pct = missing_lag1 / len(fact_seasonal_crop) * 100
+print(f"Missing lag1 values: {missing_lag1:,} ({missing_pct:.1f}%)")
 # Expected: ~15-20% missing (1997-1999 + new districts)
 
 # Verify no future leakage
-assert crop_yield_df[crop_yield_df['year'] == '2020-01-01']['yield_lag1'].iloc[0] == \
-       crop_yield_df[crop_yield_df['year'] == '2019-01-01']['yield'].iloc[0]
+sample_2020 = fact_seasonal_crop[fact_seasonal_crop['crop_year'] == 2020].iloc[0]
+sample_2019 = fact_seasonal_crop[
+    (fact_seasonal_crop['crop_year'] == 2019) &
+    (fact_seasonal_crop['state'] == sample_2020['state']) &
+    (fact_seasonal_crop['district'] == sample_2020['district']) &
+    (fact_seasonal_crop['crop_name'] == sample_2020['crop_name']) &
+    (fact_seasonal_crop['season'] == sample_2020['season'])
+].iloc[0]
+
+assert sample_2020['yield_lag1'] == sample_2019['yield'], "Future leakage detected!"
+print("✓ No future leakage - lag features correct")
 ```
 
 ---
@@ -225,84 +330,97 @@ assert crop_yield_df[crop_yield_df['year'] == '2020-01-01']['yield_lag1'].iloc[0
 
 **Step 1: Calculate Z-Scores**
 ```python
-# State-level statistics by crop/season/year
-window_state = Window.partitionBy('state', 'crop_name', 'season', 'year')
+# Calculate state-level statistics by crop/season/year
+fact_seasonal_crop['state_mean_yield'] = fact_seasonal_crop.groupby(
+    ['state', 'crop_name', 'season', 'crop_year'], observed=True
+)['yield'].transform('mean')
 
-crop_yield_df = crop_yield_df.withColumn(
+fact_seasonal_crop['state_std_yield'] = fact_seasonal_crop.groupby(
+    ['state', 'crop_name', 'season', 'crop_year'], observed=True
+)['yield'].transform('std')
+
+# Z-score: (district_yield - state_mean) / state_std
+fact_seasonal_crop['yield_zscore'] = (
+    (fact_seasonal_crop['yield'] - fact_seasonal_crop['state_mean_yield']) / 
+    fact_seasonal_crop['state_std_yield']
+)
+
+# Clip outliers (z > 3 or z < -3)
+fact_seasonal_crop['yield_zscore_clipped'] = fact_seasonal_crop['yield_zscore'].clip(-3, 3)
+
+# Check distribution
+print("\nZ-score statistics:")
+print(fact_seasonal_crop['yield_zscore'].describe())
+print("✓ Z-scores calculated")
+```
+
+**PySpark Alternative:**
+```python
+from pyspark.sql.window import Window
+import pyspark.sql.functions as F
+
+# State-level statistics by crop/season/year
+window_state = Window.partitionBy('state', 'crop_name', 'season', 'crop_year')
+
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn(
     'state_mean_yield', 
     F.mean('yield').over(window_state)
 )
-crop_yield_df = crop_yield_df.withColumn(
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn(
     'state_std_yield', 
     F.stddev('yield').over(window_state)
 )
 
-# Z-score: (district_yield - state_mean) / state_std
-crop_yield_df = crop_yield_df.withColumn('yield_zscore',
+# Z-score
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_zscore',
     (F.col('yield') - F.col('state_mean_yield')) / F.col('state_std_yield')
 )
 
-# Clip outliers (z > 3 or z < -3)
-crop_yield_df = crop_yield_df.withColumn('yield_zscore_clipped',
+# Clip outliers
+fact_seasonal_crop_sdf = fact_seasonal_crop_sdf.withColumn('yield_zscore_clipped',
     F.when(F.col('yield_zscore') > 3, 3)
      .when(F.col('yield_zscore') < -3, -3)
      .otherwise(F.col('yield_zscore'))
 )
 ```
 
-**Pandas Alternative:**
-```python
-# Calculate state-level stats
-crop_yield_df['state_mean_yield'] = crop_yield_df.groupby(
-    ['state', 'crop_name', 'season', 'year']
-)['yield'].transform('mean')
-
-crop_yield_df['state_std_yield'] = crop_yield_df.groupby(
-    ['state', 'crop_name', 'season', 'year']
-)['yield'].transform('std')
-
-# Z-score
-crop_yield_df['yield_zscore'] = (
-    (crop_yield_df['yield'] - crop_yield_df['state_mean_yield']) / 
-    crop_yield_df['state_std_yield']
-)
-
-# Clip outliers
-crop_yield_df['yield_zscore_clipped'] = crop_yield_df['yield_zscore'].clip(-3, 3)
-```
-
 **Step 2: Identify Chronic Underperformers**
 ```python
-# Flag districts with z-score < -1 for 3+ consecutive years
-chronic_underperformers = crop_yield_df[
-    crop_yield_df['yield_zscore'] < -1
-].groupby(['state', 'district', 'crop_name'], observed=True).agg({
-    'year': 'count'
-}).reset_index()
+# Flag districts with z-score < -1 for 3+ years
+chronic_underperformers = fact_seasonal_crop[
+    fact_seasonal_crop['yield_zscore'] < -1
+].groupby(['state', 'district', 'crop_name'], observed=True).size().reset_index(name='underperform_years')
 
 chronic_underperformers = chronic_underperformers[
-    chronic_underperformers['year'] >= 3
-].rename(columns={'year': 'underperform_years'})
+    chronic_underperformers['underperform_years'] >= 3
+]
+
+print(f"Found {len(chronic_underperformers)} district-crop combinations with 3+ years of underperformance")
 
 # Merge flag back
-crop_yield_df = crop_yield_df.merge(
+fact_seasonal_crop = fact_seasonal_crop.merge(
     chronic_underperformers[['state', 'district', 'crop_name']].assign(
         is_chronic_underperformer=1
     ),
     on=['state', 'district', 'crop_name'],
     how='left'
 )
-crop_yield_df['is_chronic_underperformer'] = crop_yield_df['is_chronic_underperformer'].fillna(0)
+fact_seasonal_crop['is_chronic_underperformer'] = fact_seasonal_crop['is_chronic_underperformer'].fillna(0)
+
+print("✓ Chronic underperformer flag added")
 ```
 
 **Step 3: Visualize State Performance**
 ```python
 import seaborn as sns
 
-# Calculate % of districts underperforming by state and crop
-state_performance = crop_yield_df[
-    crop_yield_df['year'] >= '2018-01-01'  # Last 5 years
-].groupby(['state', 'crop_name'], observed=True).agg(
+# Calculate % of districts underperforming by state and crop (last 5 years)
+recent_years = fact_seasonal_crop['crop_year'] >= (fact_seasonal_crop['crop_year'].max() - 5)
+
+state_performance = fact_seasonal_crop[recent_years].groupby(
+    ['state', 'crop_name'], 
+    observed=True
+).agg(
     underperform_pct=('yield_zscore', lambda x: (x < -1).mean() * 100)
 ).reset_index()
 
@@ -312,18 +430,21 @@ heatmap_data = state_performance.pivot(
 )
 
 # Plot top 10 crops only
-top_crops = crop_yield_df.groupby('crop_name', observed=True)['area'].sum().nlargest(10).index
+top_crops = fact_seasonal_crop.groupby('crop_name', observed=True)['area'].sum().nlargest(10).index
 heatmap_data = heatmap_data[top_crops]
 
 plt.figure(figsize=(12, 10))
 sns.heatmap(heatmap_data, annot=True, fmt='.1f', cmap='RdYlGn_r', 
             vmin=0, vmax=50, cbar_kws={'label': '% Districts Underperforming'})
-plt.title('State Performance Heatmap (2018-2023)\n% of Districts with Yield Z-Score < -1')
+plt.title(f'State Performance Heatmap ({fact_seasonal_crop["crop_year"].max() - 5}-{fact_seasonal_crop["crop_year"].max()})\n% of Districts with Yield Z-Score < -1',
+          fontsize=14, fontweight='bold')
 plt.xlabel('Crop')
 plt.ylabel('State')
 plt.tight_layout()
 plt.savefig('figures/02_state_performance_heatmap.png', dpi=300, bbox_inches='tight')
 plt.show()
+
+print("✓ Visualization saved: 02_state_performance_heatmap.png")
 ```
 
 #### ML Features Generated
@@ -351,82 +472,66 @@ plt.show()
 **Importance:** HIGH - Weather is primary driver of year-to-year yield variability
 
 #### Rationale
-- Daily/monthly rainfall too granular; need seasonal totals aligned with crop cycles
+- Seasonal rainfall totals aligned with crop cycles drive yield variability
 - Different crops have different water requirements (rice vs wheat vs pulses)
 - Rainfall timing matters (early vs late season drought)
 
 #### Implementation
 
-**Step 1: Define Season-Month Mapping**
-```python
-# Season definitions (from CLAUDE.md)
-season_months = {
-    'Kharif': [6, 7, 8, 9, 10],      # Monsoon crops
-    'Rabi': [11, 12, 1, 2, 3],       # Winter crops
-    'Zaid': [3, 4, 5, 6],            # Summer crops
-    'Summer': [3, 4, 5, 6],
-    'Autumn': [9, 10, 11],
-    'Winter': [12, 1, 2],
-    'Whole Year': list(range(1, 13)),
-    'Total': list(range(1, 13))
-}
+**✨ SIMPLIFIED: Weather Features Pre-Computed in fact_seasonal_crop**
 
-# Create mapping dataframe
-season_month_map = []
-for season, months in season_months.items():
-    for month in months:
-        season_month_map.append({'season': season, 'month': month})
-season_month_df = pd.DataFrame(season_month_map)
+The following features are **already available** - no manual aggregation needed:
+- `seasonal_precip_total` - Total rainfall during crop season (mm)
+- `seasonal_precip_avg` - Average monthly rainfall (mm)
+- `seasonal_precip_max` - Peak monthly rainfall (mm)  
+- `rainy_days` - Count of months with >2.5mm rain
+
+**Note:** Year-wrapping for Rabi season (Nov-Mar) is automatically handled!
+
+**Step 1: Explore Pre-Computed Features**
+```python
+# Check weather feature coverage
+print("Pre-computed weather features:")
+print(f"  seasonal_precip_total: {fact_seasonal_crop['seasonal_precip_total'].notna().mean():.1%} coverage")
+print(f"  seasonal_precip_avg: {fact_seasonal_crop['seasonal_precip_avg'].notna().mean():.1%} coverage")
+print(f"  rainy_days: {fact_seasonal_crop['rainy_days'].notna().mean():.1%} coverage")
+
+# Expected: 93.6% coverage for precipitation (26 districts have no precip data)
+# Note: Missing data is due to spatial gaps in source data, not temporal issues
+
+# For complete cases only (recommended for initial analysis):
+fact_seasonal_crop_complete = fact_seasonal_crop[
+    fact_seasonal_crop['seasonal_precip_total'].notna()
+]
+print(f"\nComplete cases: {len(fact_seasonal_crop_complete):,} records (93.6%)")
+
+# Summary statistics by season
+weather_summary = fact_seasonal_crop.groupby('season', observed=True).agg({
+    'seasonal_precip_total': ['mean', 'std', 'min', 'max'],
+    'rainy_days': 'mean'
+}).round(1)
+
+print("\nSeasonal rainfall statistics:")
+print(weather_summary)
 ```
 
-**Step 2: Aggregate Rainfall by Season**
+**Step 2: Create Derived Weather Features** 
 ```python
-# Merge precipitation with season mapping
-precipitation_df['year_int'] = precipitation_df['year']
-precipitation_seasonal = precipitation_df.merge(
-    season_month_df, on='month', how='inner'
+# Precipitation per rainy day (intensity metric)
+fact_seasonal_crop['precip_per_rainy_day'] = (
+    fact_seasonal_crop['seasonal_precip_total'] / fact_seasonal_crop['rainy_days']
 )
 
-# Handle cross-year seasons (Rabi: Nov-Mar)
-# For months 1-3, increment year (they belong to previous crop year)
-precipitation_seasonal['crop_year'] = precipitation_seasonal.apply(
-    lambda row: row['year_int'] - 1 if row['month'] in [1, 2, 3] and row['season'] == 'Rabi' 
-    else row['year_int'],
-    axis=1
-)
+# Rainfall consistency (inverse of variability - requires monthly data if needed)
+# This would use fact_monthly_climate if needed
 
-# Aggregate by state/district/season/crop_year
-seasonal_rain = precipitation_seasonal.groupby(
-    ['state', 'district', 'season', 'crop_year'], 
-    observed=True
-).agg(
-    seasonal_rain_total=('precipitation_mm', 'sum'),
-    seasonal_rain_avg=('precipitation_mm', 'mean'),
-    seasonal_rain_std=('precipitation_mm', 'std'),
-    seasonal_rain_max=('precipitation_mm', 'max'),
-    rainy_days=('precipitation_mm', lambda x: (x > 2.5).sum())  # Days with >2.5mm
-).reset_index()
+print("✓ Derived weather features created")
 ```
 
-**Step 3: Merge with Crop Yield**
-```python
-# Extract year from datetime
-crop_yield_df['crop_year'] = crop_yield_df['year'].dt.year
-
-# Merge
-crop_yield_enriched = crop_yield_df.merge(
-    seasonal_rain,
-    on=['state', 'district', 'season', 'crop_year'],
-    how='left'
-)
-
-print(f"Merge coverage: {crop_yield_enriched['seasonal_rain_total'].notna().mean():.1%}")
-# Expected: 85-95% coverage
-```
-
-**Step 4: Optimal Rainfall Analysis**
+**Step 3: Optimal Rainfall Analysis**
 ```python
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Bin rainfall into deciles for each crop
 top_crops = ['Rice', 'Wheat', 'Sugarcane', 'Cotton(lint)', 'Maize']
@@ -435,27 +540,27 @@ fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 axes = axes.flatten()
 
 for idx, crop in enumerate(top_crops):
-    crop_data = crop_yield_enriched[
-        (crop_yield_enriched['crop_name'] == crop) &
-        (crop_yield_enriched['seasonal_rain_total'].notna())
-    ]
+    crop_data = fact_seasonal_crop[
+        (fact_seasonal_crop['crop_name'] == crop) &
+        (fact_seasonal_crop['seasonal_precip_total'].notna())
+    ].copy()
     
     # Create rainfall bins
     crop_data['rain_bin'] = pd.qcut(
-        crop_data['seasonal_rain_total'], 
+        crop_data['seasonal_precip_total'], 
         q=10, 
         labels=False, 
         duplicates='drop'
     )
     
     # Calculate mean yield by bin
-    rain_yield = crop_data.groupby('rain_bin').agg({
-        'seasonal_rain_total': 'mean',
+    rain_yield = crop_data.groupby('rain_bin', observed=True).agg({
+        'seasonal_precip_total': 'mean',
         'yield': 'mean'
     }).reset_index()
     
     # Plot
-    axes[idx].plot(rain_yield['seasonal_rain_total'], rain_yield['yield'], 
+    axes[idx].plot(rain_yield['seasonal_precip_total'], rain_yield['yield'], 
                    marker='o', linewidth=2)
     axes[idx].set_xlabel('Seasonal Rainfall (mm)')
     axes[idx].set_ylabel('Average Yield (t/ha)')
@@ -463,25 +568,33 @@ for idx, crop in enumerate(top_crops):
     axes[idx].grid(True, alpha=0.3)
     
     # Annotate optimal range
-    optimal_rain = rain_yield.loc[rain_yield['yield'].idxmax(), 'seasonal_rain_total']
-    axes[idx].axvline(optimal_rain, color='red', linestyle='--', alpha=0.5)
+    optimal_rain = rain_yield.loc[rain_yield['yield'].idxmax(), 'seasonal_precip_total']
+    axes[idx].axvline(optimal_rain, color='red', linestyle='--', alpha=0.5, label='Optimal')
 
 axes[-1].axis('off')  # Hide extra subplot
-plt.suptitle('Optimal Rainfall Ranges by Crop', fontsize=14, fontweight='bold')
+plt.suptitle('Optimal Rainfall Ranges by Crop', fontsize=14, fontweight='bold', y=1.02)
 plt.tight_layout()
 plt.savefig('figures/03_optimal_rainfall.png', dpi=300, bbox_inches='tight')
 plt.show()
+
+print("✓ Visualization saved: 03_optimal_rainfall.png")
 ```
 
 #### ML Features Generated
 | Feature Name | Description | Type | Importance |
 |--------------|-------------|------|------------|
-| `seasonal_rain_total` | Total seasonal rainfall (mm) | Float | CRITICAL |
-| `seasonal_rain_avg` | Average daily rainfall | Float | MEDIUM |
-| `seasonal_rain_std` | Rainfall variability | Float | MEDIUM |
-| `seasonal_rain_max` | Single-day maximum | Float | LOW |
-| `rainy_days` | Days with >2.5mm rain | Int | MEDIUM |
-| `rain_deficit` | Deviation from optimal (added later) | Float | HIGH |
+| `seasonal_precip_total` | Total seasonal rainfall (mm) | Float | CRITICAL |
+| `seasonal_precip_avg` | Average monthly rainfall (mm) | Float | MEDIUM |
+| `seasonal_precip_max` | Peak monthly rainfall (mm) | Float | MEDIUM |
+| `rainy_days` | Count of rainy months (>2.5mm) | Integer | MEDIUM |
+| `precip_per_rainy_day` | Rainfall intensity (mm/rainy day) | Float | MEDIUM |
+| `precip_deficit` | Deviation from optimal (add later) | Float | HIGH |
+
+**Note:** `seasonal_precip_std` (rainfall variability) not pre-computed. Calculate if needed:
+```python
+# Requires fact_monthly_climate for monthly variance calculation
+fact_seasonal_crop['seasonal_precip_std'] = ...  # Calculate from monthly data
+```
 
 #### Visualization Output
 - **File:** `figures/03_optimal_rainfall.png`
@@ -509,130 +622,136 @@ plt.show()
 
 #### Implementation
 
-**Step 1: Aggregate NDVI by Growth Phase**
+**✨ SIMPLIFIED: NDVI Features Pre-Computed by Growth Phase**
+
+The following features are **already available** - no manual aggregation needed:
+- `seasonal_ndvi_mean` - Mean NDVI across entire season
+- `seasonal_ndvi_min` - Minimum NDVI value
+- `seasonal_ndvi_max` - Maximum NDVI value
+- `early_season_ndvi` - NDVI in first third of season
+- `mid_season_ndvi` - NDVI in middle third  
+- `late_season_ndvi` - NDVI in last third
+
+**Note:** Phase features are **generic** (work for all seasons), not season-specific like the old `ndvi_mid_kharif` naming.
+
+**Step 1: Explore Pre-Computed NDVI Features**
 ```python
-# Define critical growth phases by season
-growth_phases = {
-    'Kharif': {
-        'early': [6, 7],      # Jun-Jul: sowing/emergence
-        'mid': [7, 8],        # Jul-Aug: vegetative
-        'late': [9, 10]       # Sep-Oct: reproductive/maturity
-    },
-    'Rabi': {
-        'early': [11, 12],
-        'mid': [1, 2],
-        'late': [2, 3]
-    }
-}
+# Check NDVI feature coverage
+print("Pre-computed NDVI features:")
+print(f"  seasonal_ndvi_mean: {fact_seasonal_crop['seasonal_ndvi_mean'].notna().mean():.1%} coverage")
+print(f"  early_season_ndvi: {fact_seasonal_crop['early_season_ndvi'].notna().mean():.1%} coverage")
+print(f"  mid_season_ndvi: {fact_seasonal_crop['mid_season_ndvi'].notna().mean():.1%} coverage")
+print(f"  late_season_ndvi: {fact_seasonal_crop['late_season_ndvi'].notna().mean():.1%} coverage")
 
-# Aggregate NDVI by phase
-vegetation_by_phase = []
+# Expected: ~33% coverage (2016-2023 NDVI data, monsoon sparsity)
 
-for season, phases in growth_phases.items():
-    for phase_name, months in phases.items():
-        phase_ndvi = vegetation_df[
-            vegetation_df['month'].isin(months)
-        ].groupby(['state', 'district', 'year'], observed=True).agg(
-            **{f'ndvi_{phase_name}_{season.lower()}': ('raw_ndvi_mean', 'mean'),
-               f'ndvi_min_{phase_name}_{season.lower()}': ('raw_ndvi_mean', 'min')}
-        ).reset_index()
-        
-        vegetation_by_phase.append(phase_ndvi)
-
-# Merge all phases
-vegetation_features = vegetation_by_phase[0]
-for df in vegetation_by_phase[1:]:
-    vegetation_features = vegetation_features.merge(
-        df, on=['state', 'district', 'year'], how='outer'
-    )
-```
-
-**Step 2: Correlate with Final Yield**
-```python
-# Merge with crop yield (align crop_year with vegetation year)
-crop_yield_veg = crop_yield_enriched.merge(
-    vegetation_features,
-    left_on=['state', 'district', 'crop_year'],
-    right_on=['state', 'district', 'year'],
-    how='left'
+# Create derived feature: NDVI trend across season
+fact_seasonal_crop['ndvi_season_trend'] = (
+    fact_seasonal_crop['late_season_ndvi'] - fact_seasonal_crop['early_season_ndvi']
 )
 
-# Calculate correlation by crop
+# NDVI variability within season
+fact_seasonal_crop['ndvi_season_range'] = (
+    fact_seasonal_crop['seasonal_ndvi_max'] - fact_seasonal_crop['seasonal_ndvi_min']
+)
+
+print("✓ Derived NDVI features created")
+```
+
+**Step 2: Correlate NDVI with Yield by Crop**
+```python
+# Calculate correlation by crop for each growth phase
+top_crops = ['Rice', 'Wheat', 'Sugarcane', 'Cotton(lint)', 'Maize']
+
 correlations = []
 for crop in top_crops:
-    crop_data = crop_yield_veg[crop_yield_veg['crop_name'] == crop]
-    season = crop_data['season'].mode()[0]  # Dominant season for this crop
+    crop_data = fact_seasonal_crop[
+        (fact_seasonal_crop['crop_name'] == crop) &
+        (fact_seasonal_crop['mid_season_ndvi'].notna())
+    ]
     
-    for phase in ['early', 'mid', 'late']:
-        col = f'ndvi_{phase}_{season.lower()}'
-        if col in crop_data.columns:
-            corr = crop_data[['yield', col]].corr().iloc[0, 1]
-            correlations.append({
-                'crop': crop,
-                'season': season,
-                'phase': phase,
-                'correlation': corr
-            })
+    for phase_col in ['early_season_ndvi', 'mid_season_ndvi', 'late_season_ndvi']:
+        corr = crop_data[['yield', phase_col]].corr().iloc[0, 1]
+        correlations.append({
+            'crop': crop,
+            'phase': phase_col.replace('_season_ndvi', '').replace('_', ' ').title(),
+            'correlation': corr,
+            'n_samples': crop_data[[phase_col, 'yield']].dropna().shape[0]
+        })
 
 corr_df = pd.DataFrame(correlations)
+print("\nNDVI-Yield Correlations:")
+print(corr_df.pivot(index='crop', columns='phase', values='correlation').round(3))
 ```
 
 **Step 3: Visualize NDVI-Yield Relationship**
 ```python
-# Scatter plots with regression lines
+import numpy as np
+
+# Scatter plots with regression lines (using mid-season NDVI)
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 axes = axes.flatten()
 
 for idx, crop in enumerate(top_crops):
-    crop_data = crop_yield_veg[crop_yield_veg['crop_name'] == crop]
-    season = crop_data['season'].mode()[0]
-    ndvi_col = f'ndvi_mid_{season.lower()}'
+    crop_data = fact_seasonal_crop[
+        (fact_seasonal_crop['crop_name'] == crop) &
+        (fact_seasonal_crop['mid_season_ndvi'].notna())
+    ]
     
-    if ndvi_col in crop_data.columns:
-        # Remove NaN
-        plot_data = crop_data[[ndvi_col, 'yield']].dropna()
-        
+    # Remove NaN
+    plot_data = crop_data[['mid_season_ndvi', 'yield']].dropna()
+    
+    if len(plot_data) > 10:  # Ensure sufficient data
         # Scatter
-        axes[idx].scatter(plot_data[ndvi_col], plot_data['yield'], 
-                         alpha=0.3, s=10)
+        axes[idx].scatter(plot_data['mid_season_ndvi'], plot_data['yield'], 
+                         alpha=0.3, s=10, color='steelblue')
         
         # Regression line
-        z = np.polyfit(plot_data[ndvi_col], plot_data['yield'], 1)
+        z = np.polyfit(plot_data['mid_season_ndvi'], plot_data['yield'], 1)
         p = np.poly1d(z)
-        x_line = np.linspace(plot_data[ndvi_col].min(), plot_data[ndvi_col].max(), 100)
-        axes[idx].plot(x_line, p(x_line), "r-", linewidth=2)
+        x_line = np.linspace(plot_data['mid_season_ndvi'].min(), 
+                             plot_data['mid_season_ndvi'].max(), 100)
+        axes[idx].plot(x_line, p(x_line), "r-", linewidth=2, label='Trend')
         
         # Correlation coefficient
         corr = plot_data.corr().iloc[0, 1]
-        axes[idx].text(0.05, 0.95, f'r = {corr:.3f}', 
+        axes[idx].text(0.05, 0.95, f'r = {corr:.3f}\nn = {len(plot_data):,}', 
                       transform=axes[idx].transAxes, 
                       verticalalignment='top',
-                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                      bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
         
-        axes[idx].set_xlabel(f'Mid-Season NDVI ({season})')
+        axes[idx].set_xlabel('Mid-Season NDVI')
         axes[idx].set_ylabel('Yield (t/ha)')
         axes[idx].set_title(f'{crop}')
         axes[idx].grid(True, alpha=0.3)
 
 axes[-1].axis('off')
-plt.suptitle('Vegetation Index vs Yield Correlation', fontsize=14, fontweight='bold')
+plt.suptitle('Vegetation Index vs Yield Correlation\n(Generic Phase Features)', 
+             fontsize=14, fontweight='bold', y=1.02)
 plt.tight_layout()
 plt.savefig('figures/04_ndvi_yield_correlation.png', dpi=300, bbox_inches='tight')
 plt.show()
+
+print("✓ Visualization saved: 04_ndvi_yield_correlation.png")
 ```
 
 #### ML Features Generated
 | Feature Name | Description | Type | Importance |
 |--------------|-------------|------|------------|
-| `ndvi_early_kharif` | Early season NDVI (Jun-Jul) | Float | MEDIUM |
-| `ndvi_mid_kharif` | Mid-season NDVI (Jul-Aug) | Float | HIGH |
-| `ndvi_late_kharif` | Late season NDVI (Sep-Oct) | Float | MEDIUM |
-| `ndvi_min_mid_kharif` | Lowest mid-season NDVI | Float | HIGH |
-| *(Similar for Rabi)* | | | |
+| `seasonal_ndvi_mean` | Mean NDVI across season | Float | MEDIUM |
+| `early_season_ndvi` | NDVI in first third | Float | MEDIUM |
+| `mid_season_ndvi` | NDVI in middle third | Float | HIGH |
+| `late_season_ndvi` | NDVI in last third | Float | MEDIUM |
+| `seasonal_ndvi_min` | Minimum NDVI value | Float | HIGH |
+| `seasonal_ndvi_max` | Maximum NDVI value | Float | LOW |
+| `ndvi_season_trend` | Late - Early (growth trajectory) | Float | MEDIUM |
+| `ndvi_season_range` | Max - Min (variability) | Float | MEDIUM |
+
+**Note:** Features are **generic** (work for all seasons/crops), not season-specific like old naming.
 
 #### Expected Insights
-- **Rice:** Mid-Kharif NDVI explains 40-50% of yield variance (r = 0.6-0.7)
-- **Wheat:** Mid-Rabi NDVI explains 30-40% (r = 0.5-0.6)
+- **Rice:** Mid-season NDVI explains 40-50% of yield variance (r = 0.6-0.7)
+- **Wheat:** Mid-season NDVI explains 30-40% (r = 0.5-0.6)
 - **Early warning:** NDVI < 0.3 in mid-season → 20-30% yield shortfall likely
 - **Actionable:** Deploy pest control, emergency irrigation when NDVI drops
 
@@ -647,14 +766,17 @@ plt.show()
 **Step 1: Calculate Area Changes**
 ```python
 # Year-over-year area change
-crop_yield_df = crop_yield_df.sort_values(['state', 'district', 'crop_name', 'season', 'year'])
+fact_seasonal_crop = fact_seasonal_crop.sort_values(
+    ['state', 'district', 'crop_name', 'season', 'crop_year']
+)
 
-crop_yield_df['area_lag1'] = crop_yield_df.groupby(
+fact_seasonal_crop['area_lag1'] = fact_seasonal_crop.groupby(
     ['state', 'district', 'crop_name', 'season']
 )['area'].shift(1)
 
-crop_yield_df['area_change_pct'] = (
-    (crop_yield_df['area'] - crop_yield_df['area_lag1']) / crop_yield_df['area_lag1'] * 100
+fact_seasonal_crop['area_change_pct'] = (
+    (fact_seasonal_crop['area'] - fact_seasonal_crop['area_lag1']) / 
+    fact_seasonal_crop['area_lag1'] * 100
 )
 
 # 3-year area trend (linear regression slope)
@@ -665,7 +787,7 @@ def calc_trend(series):
     slope, _ = np.polyfit(x, series, 1)
     return slope
 
-crop_yield_df['area_trend_3yr'] = crop_yield_df.groupby(
+fact_seasonal_crop['area_trend_3yr'] = fact_seasonal_crop.groupby(
     ['state', 'district', 'crop_name', 'season']
 )['area'].rolling(window=3).apply(calc_trend, raw=False).reset_index(drop=True)
 ```
@@ -673,7 +795,7 @@ crop_yield_df['area_trend_3yr'] = crop_yield_df.groupby(
 **Step 2: Correlate with Profitability**
 ```python
 # Expansion response: do farmers plant more after profitable year?
-expansion_response = crop_yield_df.groupby(
+expansion_response = fact_seasonal_crop.groupby(
     ['state', 'crop_name', 'season'], 
     observed=True
 ).apply(lambda g: g[['yield_lag1', 'area_change_pct']].corr().iloc[0, 1]).reset_index(name='expansion_correlation')
@@ -688,10 +810,10 @@ fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 axes = axes.flatten()
 
 for idx, crop in enumerate(top_crops):
-    crop_data = crop_yield_df[
-        (crop_yield_df['crop_name'] == crop) &
-        (crop_yield_df['area_change_pct'].notna()) &
-        (crop_yield_df['yield_lag1'].notna())
+    crop_data = fact_seasonal_crop[
+        (fact_seasonal_crop['crop_name'] == crop) &
+        (fact_seasonal_crop['area_change_pct'].notna()) &
+        (fact_seasonal_crop['yield_lag1'].notna())
     ]
     
     # Aggregate by state/year
@@ -739,34 +861,38 @@ plt.show()
 
 **Step 1: Create Water Stress Score**
 ```python
-# Merge rainfall and NDVI
-water_stress = crop_yield_enriched.copy()
-
-# Interaction term: rain × NDVI (scaled)
-water_stress['water_stress_score'] = (
-    water_stress['seasonal_rain_total'] * 
-    water_stress['ndvi_mid_kharif'] / 1000
+# Water stress features already in fact_seasonal_crop
+# Create interaction term: precipitation × NDVI (scaled)
+fact_seasonal_crop['water_stress_score'] = (
+    fact_seasonal_crop['seasonal_precip_total'] * 
+    fact_seasonal_crop['mid_season_ndvi'] / 1000
 )
 
-# Classify stress types
-water_stress['stress_type'] = 'normal'
-water_stress.loc[
-    (water_stress['seasonal_rain_total'] < 400) & 
-    (water_stress['ndvi_mid_kharif'] < 0.3), 
+# Classify stress types (generic for all seasons)
+fact_seasonal_crop['stress_type'] = 'normal'
+
+# Drought: low precipitation + low NDVI
+fact_seasonal_crop.loc[
+    (fact_seasonal_crop['seasonal_precip_total'] < 400) & 
+    (fact_seasonal_crop['mid_season_ndvi'] < 0.3), 
     'stress_type'
 ] = 'drought'
 
-water_stress.loc[
-    (water_stress['seasonal_rain_total'] > 800) & 
-    (water_stress['ndvi_mid_kharif'] < 0.3), 
+# Pest/Disease: high precipitation + low NDVI
+fact_seasonal_crop.loc[
+    (fact_seasonal_crop['seasonal_precip_total'] > 800) & 
+    (fact_seasonal_crop['mid_season_ndvi'] < 0.3), 
     'stress_type'
 ] = 'pest_disease'
 
-water_stress.loc[
-    (water_stress['seasonal_rain_total'] < 400) & 
-    (water_stress['ndvi_mid_kharif'] > 0.5), 
+# Irrigated: low precipitation + high NDVI
+fact_seasonal_crop.loc[
+    (fact_seasonal_crop['seasonal_precip_total'] < 400) & 
+    (fact_seasonal_crop['mid_season_ndvi'] > 0.5), 
     'stress_type'
 ] = 'irrigated'
+
+print(fact_seasonal_crop['stress_type'].value_counts())
 ```
 
 **Step 2: Quadrant Plot**
@@ -780,30 +906,39 @@ stress_colors = {
     'irrigated': 'blue'
 }
 
+# Filter to complete cases only
+plot_data = fact_seasonal_crop[
+    fact_seasonal_crop['seasonal_precip_total'].notna() &
+    fact_seasonal_crop['mid_season_ndvi'].notna()
+]
+
 for stress_type, color in stress_colors.items():
-    subset = water_stress[water_stress['stress_type'] == stress_type]
+    subset = plot_data[plot_data['stress_type'] == stress_type]
     plt.scatter(
-        subset['seasonal_rain_total'],
-        subset['ndvi_mid_kharif'],
+        subset['seasonal_precip_total'],
+        subset['mid_season_ndvi'],
         c=color,
-        label=stress_type,
+        label=f'{stress_type} (n={len(subset):,})',
         alpha=0.5,
         s=20
     )
 
-plt.axvline(400, color='gray', linestyle='--', alpha=0.5)
-plt.axvline(800, color='gray', linestyle='--', alpha=0.5)
-plt.axhline(0.3, color='gray', linestyle='--', alpha=0.5)
-plt.axhline(0.5, color='gray', linestyle='--', alpha=0.5)
+# Threshold lines
+plt.axvline(400, color='gray', linestyle='--', alpha=0.5, label='Low precip threshold')
+plt.axvline(800, color='gray', linestyle='--', alpha=0.5, label='High precip threshold')
+plt.axhline(0.3, color='gray', linestyle='--', alpha=0.5, label='Low NDVI threshold')
+plt.axhline(0.5, color='gray', linestyle='--', alpha=0.5, label='High NDVI threshold')
 
-plt.xlabel('Seasonal Rainfall (mm)')
+plt.xlabel('Seasonal Precipitation (mm)')
 plt.ylabel('Mid-Season NDVI')
-plt.title('Water Stress Classification (Kharif Season)')
-plt.legend()
+plt.title('Water Stress Classification\n(Generic for All Seasons)', fontsize=14, fontweight='bold')
+plt.legend(loc='best', fontsize=9)
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig('figures/06_water_stress_quadrant.png', dpi=300, bbox_inches='tight')
 plt.show()
+
+print("✓ Visualization saved: 06_water_stress_quadrant.png")
 ```
 
 #### Expected Insights
@@ -833,107 +968,156 @@ plt.show()
 
 ## Implementation Plan
 
-### Phase 1: Data Preparation (1 day)
+**Note:** Timeline reduced from 5-6 days to **4 days** due to pre-computed weather/NDVI features! 🎉
+
+### Phase 1: Data Preparation (0.5 days)
 1. Create notebook: `01_feature_engineering.ipynb`
-2. Load processed pickle files
-3. Convert year to integer, handle categorical columns
+2. Load `fact_seasonal_crop` (consolidated table)
+3. Explore 10 pre-computed features (precipitation + NDVI + coordinates)
 4. Verify data quality (no duplicates, coverage checks)
 
-### Phase 2: Feature Engineering (3-5 days)
-- **Day 1:** Analyses 1-2 (lagged yields, z-scores)
-- **Day 2:** Analysis 3 (seasonal weather)
-- **Day 3:** Analyses 4-5 (NDVI, expansion)
-- **Day 4:** Analyses 6-7 (water stress, trends)
-- **Day 5:** Analysis 8 + integration
+### Phase 2: Feature Engineering (2 days)
+- **Day 1:** Analyses 1-2 (lagged yields, z-scores, chronic underperformers)
+- **Day 2:** Analyses 5-6 (crop expansion signals, water stress interactions)
 
-### Phase 3: Visualization (2-3 days)
-- Generate all 8 publication-quality plots
-- Create summary dashboard
+**Skipped:** Analyses 3-4 (weather and NDVI aggregation) - already pre-computed!
 
-### Phase 4: Feature Export (1 day)
+### Phase 3: Visualization & Insights (1 day)
+- Generate publication-quality plots (autocorrelation, heatmaps, quadrant plots)
+- Create derived features (ratios, trends, interactions)
+- Document insights
+
+### Phase 4: Feature Export & Validation (0.5 days)
 - Save final feature dataframe
-- Document feature dictionary
+- Document feature dictionary (10 pre-computed + 10 engineered)
 - Validate against leakage
 
 ---
 
 ## Verification & Testing
 
-### Feature Completeness
+### 1. Pre-Computed Feature Validation
 ```python
-expected_features = [
-    'yield_lag1', 'yield_lag2', 'yield_lag3',
-    'yield_zscore', 'seasonal_rain_total',
-    'ndvi_mid_kharif', 'water_stress_score'
+# Verify all 10 pre-computed features exist
+precomputed_features = [
+    'seasonal_precip_total', 'seasonal_precip_avg', 'seasonal_precip_max', 'rainy_days',
+    'seasonal_ndvi_mean', 'seasonal_ndvi_min', 'seasonal_ndvi_max',
+    'early_season_ndvi', 'mid_season_ndvi', 'late_season_ndvi'
 ]
 
-for feat in expected_features:
-    assert feat in crop_yield_features.columns, f"Missing: {feat}"
+print("Pre-computed feature coverage:")
+for feat in precomputed_features:
+    assert feat in fact_seasonal_crop.columns, f"Missing pre-computed feature: {feat}"
+    coverage = fact_seasonal_crop[feat].notna().mean()
+    print(f"  {feat:25s} {coverage:>6.1%} coverage")
+
+print("\n✓ All pre-computed features validated")
 ```
 
-### No Data Leakage
+### 2. Engineered Feature Completeness
+```python
+# Verify engineered features were created
+engineered_features = [
+    'yield_lag1', 'yield_lag2', 'yield_lag3',
+    'yield_zscore', 'water_stress_score', 'area_change_pct'
+]
+
+for feat in engineered_features:
+    assert feat in fact_seasonal_crop.columns, f"Missing engineered: {feat}"
+
+print("✓ All engineered features present")
+```
+
+### 3. No Data Leakage
 ```python
 # Verify lagged features are correct
 test_year = 2020
-test_row = crop_yield_features[
-    (crop_yield_features['crop_year'] == test_year) &
-    (crop_yield_features['state'] == 'Punjab') &
-    (crop_yield_features['crop_name'] == 'Wheat')
+test_row = fact_seasonal_crop[
+    (fact_seasonal_crop['crop_year'] == test_year) &
+    (fact_seasonal_crop['state'] == 'Punjab') &
+    (fact_seasonal_crop['crop_name'] == 'Wheat')
 ].iloc[0]
 
-prev_row = crop_yield_features[
-    (crop_yield_features['crop_year'] == test_year - 1) &
-    (crop_yield_features['state'] == 'Punjab') &
-    (crop_yield_features['crop_name'] == 'Wheat')
+prev_row = fact_seasonal_crop[
+    (fact_seasonal_crop['crop_year'] == test_year - 1) &
+    (fact_seasonal_crop['state'] == 'Punjab') &
+    (fact_seasonal_crop['crop_name'] == 'Wheat')
 ].iloc[0]
 
 assert np.isclose(test_row['yield_lag1'], prev_row['yield']), "Leakage detected!"
+print("✓ No data leakage in lagged features")
 ```
 
-### Feature Distributions
+### 4. Feature Distributions
 ```python
-crop_yield_features[['yield_zscore', 'seasonal_rain_total', 'ndvi_mid_kharif']].describe()
+# Check key feature distributions
+fact_seasonal_crop[['yield_zscore', 'seasonal_precip_total', 'mid_season_ndvi']].describe()
 
 # Z-score should have mean ~0, std ~1
-assert -0.1 < crop_yield_features['yield_zscore'].mean() < 0.1
-assert 0.9 < crop_yield_features['yield_zscore'].std() < 1.1
+assert -0.1 < fact_seasonal_crop['yield_zscore'].mean() < 0.1
+assert 0.9 < fact_seasonal_crop['yield_zscore'].std() < 1.1
+
+print("✓ Feature distributions look healthy")
 ```
 
 ---
 
 ## Expected Outcomes
 
-### ML Features (15+ total)
-✓ Temporal: yield_lag1/2/3, yield_change_1yr, yield_rolling_mean_3yr  
-✓ Spatial: yield_zscore, state_mean_yield, is_chronic_underperformer  
-✓ Weather: seasonal_rain_total/avg/std, rainy_days  
-✓ Vegetation: ndvi_early/mid/late, ndvi_min  
-✓ Interactions: water_stress_score, stress_type  
-✓ Context: area_change_pct, crop_diversity  
+### ML Features (20+ total: 10 Pre-computed + 10 Engineered)
+
+**Pre-Computed (from fact_seasonal_crop):**
+- ✅ Weather: `seasonal_precip_total`, `seasonal_precip_avg`, `seasonal_precip_max`, `rainy_days`
+- ✅ Vegetation: `seasonal_ndvi_mean/min/max`, `early_season_ndvi`, `mid_season_ndvi`, `late_season_ndvi`
+- ✅ Geography: `centroid_lat`, `centroid_lon`
+
+**To Be Engineered:**
+- ⚙️ Temporal: `yield_lag1/2/3`, `yield_change_1yr`, `yield_rolling_mean_3yr`
+- ⚙️ Spatial: `yield_zscore`, `state_mean_yield`, `is_chronic_underperformer`
+- ⚙️ Interactions: `water_stress_score`, `stress_type`, `precip_ndvi_ratio`
+- ⚙️ Context: `area_change_pct`, `area_trend_3yr`
+
+**Key Benefit:** ~40% reduction in engineering effort due to pre-computed features! 🎉
 
 ### Actionable Insights
 - List of 40-50 underperforming districts with specific crops
-- Optimal rainfall ranges for top 10 crops
-- Early warning NDVI thresholds
+- Optimal precipitation ranges for top 10 crops (using pre-computed seasonal totals)
+- Early warning NDVI thresholds (using pre-computed phase features)
 - Crop expansion/contraction trends by state
 
-### Visualizations (8 files)
+### Visualizations (6 core files)
 1. `01_yield_autocorrelation.png` - ACF plots by crop
 2. `02_state_performance_heatmap.png` - Z-score heatmap
-3. `03_optimal_rainfall.png` - Yield vs rainfall curves
-4. `04_ndvi_yield_correlation.png` - Scatter plots with regression
-5. `05_expansion_signals.png` - Bubble chart area change vs yield
-6. `06_water_stress_quadrant.png` - Rainfall vs NDVI quadrants
-7. `07_yield_trends.png` - Time series with changepoints
-8. `08_crop_diversity_map.png` - State specialization map
+3. `04_ndvi_yield_correlation.png` - Scatter plots with regression (generic phases)
+4. `05_expansion_signals.png` - Bubble chart area change vs yield
+5. `06_water_stress_quadrant.png` - Precipitation vs NDVI quadrants
+6. (Optional) `07_yield_trends.png` - Time series with changepoints
 
 ---
 
 ## Next Steps
 
-1. Create notebook: `notebooks/modeling/01_feature_engineering.ipynb`
-2. Follow Priority 1 analyses first (lagged yields, z-scores, weather)
-3. Validate features before moving to Priority 2
-4. Export final dataset to: `data/features/crop_yield_ml_features.parquet`
+1. **Load consolidated data:**
+   ```python
+   import pandas as pd
+   fact_seasonal_crop = pd.read_parquet('data/processed/fact_seasonal_crop_spark.parquet')
+   # 93,262 records spanning 2016-2023 with 10 pre-computed features
+   ```
 
-**Remember:** Always use `observed=True` in groupby operations due to categorical columns!
+2. **Create notebook:** `notebooks/modeling/01_feature_engineering.ipynb`
+
+3. **Follow Priority 1 analyses first:** (lagged yields, z-scores)
+   - These don't require weather/NDVI data, work on full 2016-2023 range
+
+4. **Validate features before moving to Priority 2**
+
+5. **Export final dataset:**
+   ```python
+   fact_seasonal_crop.to_parquet('data/features/crop_yield_ml_features.parquet', index=False)
+   ```
+
+**Important Notes:**
+- ✅ Always use `observed=True` in groupby operations due to categorical columns
+- ✅ Data is **2016-2023** only (8 years), not 1997-2023
+- ✅ **93,262 records** total (not 361K - that was pandas version with duplicates)
+- ✅ Weather coverage is **93.6%**, NDVI is **99.0%** (excellent!)
