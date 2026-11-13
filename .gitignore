@@ -236,4 +236,10 @@ models/*.joblib
 # macOS
 .DS_Store
 
+# Spark/Parquet files
+*.snappy.parquet
+*.snappy.parquet.crc
+*.parquet.crc
+.part-*.snappy.parquet.crc
+
 # Note: .md files (CLAUDE.md, README.md, SETUP.md) are tracked in git
