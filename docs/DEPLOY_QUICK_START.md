@@ -27,7 +27,7 @@ docker --version
    ```
 6. Migrate data:
    ```bash
-   mongodump --db agri_analytics --out ./backup
+   mongodump --db agri_analytics --out ./mongodb_backup
    mongorestore --uri "mongodb+srv://..." --db agri_analytics ./backup/agri_analytics
    ```
 
@@ -35,7 +35,7 @@ docker --version
 
 ```bash
 # Create project
-export PROJECT_ID="agri-analytics-$(date +%s)"
+export PROJECT_ID="dsba-2026"
 gcloud projects create $PROJECT_ID
 gcloud config set project $PROJECT_ID
 
@@ -53,10 +53,9 @@ export REGION="us-central1"
 ## Step 3: Deploy Backend (10 min)
 
 ```bash
-cd src/api
 
 # Build and deploy
-gcloud builds submit --tag gcr.io/$PROJECT_ID/agri-backend:v1 .
+gcloud builds submit --tag gcr.io/$PROJECT_ID/agri-backend:v1 src/api
 
 gcloud run deploy agri-backend \
   --image gcr.io/$PROJECT_ID/agri-backend:v1 \
