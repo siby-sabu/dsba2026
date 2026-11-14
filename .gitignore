@@ -246,4 +246,11 @@ models/*.joblib
 node_modules/
 frontend/node_modules/
 
+# Large GeoJSON files (split into part1 and part2)
+frontend/public/india_states.geojson
+
+# Large MongoDB BSON files (split into part1 and part2)
+mongodb_backup/agri_analytics/seasonal_crop_data.bson
+mongodb_backup/agri_analytics/seasonal_crop_data.metadata.json
+
 # Note: .md files (CLAUDE.md, README.md, SETUP.md) are tracked in git
