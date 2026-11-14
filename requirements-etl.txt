@@ -1,0 +1,5 @@
+# ETL Requirements
+pymongo==4.6.0
+pandas==2.0.3
+numpy==1.24.3
+pyarrow==12.0.1
