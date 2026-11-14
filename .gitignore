@@ -242,4 +242,8 @@ models/*.joblib
 *.parquet.crc
 .part-*.snappy.parquet.crc
 
+# Node.js / Frontend
+node_modules/
+frontend/node_modules/
+
 # Note: .md files (CLAUDE.md, README.md, SETUP.md) are tracked in git
