@@ -19,11 +19,18 @@ class Settings:
     PROJECT_NAME: str = "Agricultural Analytics API"
     VERSION: str = "1.0.0"
 
-    # CORS Configuration (for local React dev server)
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",  # React dev server
-        "http://localhost:8000",  # Local API docs
-    ]
+    # CORS Configuration
+    # Support both comma and semicolon delimiters for flexibility
+    _cors_env = os.getenv("CORS_ORIGINS", "")
+    if _cors_env:
+        # Try semicolon first (for URLs with commas), then comma
+        delimiter = ";" if ";" in _cors_env else ","
+        CORS_ORIGINS: List[str] = [origin.strip() for origin in _cors_env.split(delimiter)]
+    else:
+        CORS_ORIGINS: List[str] = [
+            "http://localhost:3000",  # React dev server
+            "http://localhost:8000",  # Local API docs
+        ]
 
     # Pagination defaults
     DEFAULT_PAGE_SIZE: int = 100

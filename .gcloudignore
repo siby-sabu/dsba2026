@@ -1,0 +1,86 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore.
+
+.gcloudignore
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+venv/
+env/
+dsba/
+
+# Node.js / Frontend (exclude frontend entirely - it has its own build)
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+
+# Notebooks and analysis (not needed for backend API)
+notebooks/
+*.ipynb
+
+# MongoDB backups (large BSON files)
+mongodb_backup/
+
+# Documentation (not needed for runtime)
+docs/
+*.md
+README*.md
+CLAUDE.md
+
+# Data files (keep only what's needed)
+# Exclude raw and interim data
+data/raw/
+data/interim/
+
+# Exclude most processed data files
+data/processed/*.csv
+data/processed/*.pkl
+data/processed/*.parquet
+data/processed/*.xlsx
+data/processed/*.xls
+
+# BUT include the GeoJSON file (must come after the excludes)
+!data/processed/india_states_simplified.geojson
+
+# IDE and dev tools
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Scripts (not needed for API runtime)
+scripts/
+
+# ML Models directory at project root (not the src/api/models/ Python package!)
+# Note: src/api/models/ contains Python code and MUST be included
+/models/
+
+# Temporary files
+*.tmp
+*.bak
+test_dockerignore.sh

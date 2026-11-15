@@ -42,7 +42,8 @@ function App() {
       setLoading(false);
     } catch (err) {
       console.error('Error loading data:', err);
-      setError('Failed to load data. Make sure the API is running at http://localhost:8000');
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+      setError(`Failed to load data. Check backend connectivity at ${apiUrl}`);
       setLoading(false);
     }
   };
