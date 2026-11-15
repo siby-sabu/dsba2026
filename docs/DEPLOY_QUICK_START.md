@@ -27,7 +27,7 @@ docker --version
    ```
 6. Migrate data:
    ```bash
-   mongodump --db agri_analytics --out ./backup
+   mongodump --db agri_analytics --out ./mongodb_backup
    mongorestore --uri "mongodb+srv://..." --db agri_analytics ./backup/agri_analytics
    ```
 
@@ -35,7 +35,7 @@ docker --version
 
 ```bash
 # Create project
-export PROJECT_ID="agri-analytics-$(date +%s)"
+export PROJECT_ID="dsba-2026"
 gcloud projects create $PROJECT_ID
 gcloud config set project $PROJECT_ID
 
@@ -53,11 +53,13 @@ export REGION="us-central1"
 ## Step 3: Deploy Backend (10 min)
 
 ```bash
-cd src/api
+# Navigate to PROJECT ROOT (important!)
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
 
-# Build and deploy
-gcloud builds submit --tag gcr.io/$PROJECT_ID/agri-backend:v1 .
+# Build backend from root (includes map data)
+gcloud builds submit --config=cloudbuild-backend.yaml .
 
+# Deploy (use semicolon for CORS!)
 gcloud run deploy agri-backend \
   --image gcr.io/$PROJECT_ID/agri-backend:v1 \
   --platform managed \
@@ -66,29 +68,39 @@ gcloud run deploy agri-backend \
   --port 8080 \
   --memory 512Mi \
   --min-instances 0 \
-  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:PASSWORD@cluster.xxxxx.mongodb.net/agri_analytics" \
-  --set-env-vars "MONGODB_DB_NAME=agri_analytics" \
-  --set-env-vars "CORS_ORIGINS=*"
+  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:PASSWORD@cluster.xxxxx.mongodb.net/agri_analytics,MONGODB_DB_NAME=agri_analytics,CORS_ORIGINS=http://localhost:3000;https://agri-frontend-weju5ycsna-uc.a.run.app"
 
 # Get backend URL
 export BACKEND_URL=$(gcloud run services describe agri-backend --region $REGION --format 'value(status.url)')
 echo "Backend: $BACKEND_URL"
 
 # Test
-curl $BACKEND_URL/health
+curl $BACKEND_URL/health | jq .
+curl $BACKEND_URL/api/v1/states | jq '.states | length'
 ```
+
+**Important:**
+- Build from **project root**, not `src/api`
+- Use **semicolon (;)** for multiple CORS origins
+- All env vars in **ONE** `--set-env-vars` flag
 
 ## Step 4: Deploy Frontend (10 min)
 
 ```bash
-cd ../frontend
+# Still in project root
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
 
-# Set backend URL
-echo "REACT_APP_API_URL=$BACKEND_URL/api/v1" > .env.production
+# Set backend URL in frontend/.env.production
+echo "REACT_APP_API_URL=$BACKEND_URL/api/v1" > frontend/.env.production
 
-# Build and deploy
-gcloud builds submit --tag gcr.io/$PROJECT_ID/agri-frontend:v1 .
+# Build frontend from project root using cloudbuild-frontend.yaml
+# MUST provide backend URL
+gcloud builds submit \
+  --config=cloudbuild-frontend.yaml \
+  --substitutions=_BACKEND_URL="$BACKEND_URL" \
+  .
 
+# Deploy
 gcloud run deploy agri-frontend \
   --image gcr.io/$PROJECT_ID/agri-frontend:v1 \
   --platform managed \
@@ -102,9 +114,11 @@ gcloud run deploy agri-frontend \
 export FRONTEND_URL=$(gcloud run services describe agri-frontend --region $REGION --format 'value(status.url)')
 echo "Frontend: $FRONTEND_URL"
 
-# Update CORS
-gcloud run services update agri-backend --region $REGION --update-env-vars "CORS_ORIGINS=$FRONTEND_URL"
+# Update CORS (if needed)
+gcloud run services update agri-backend --region $REGION --update-env-vars "CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
 ```
+
+**Note:** Both backend and frontend now build from project root for consistency!
 
 ## Step 5: Test
 

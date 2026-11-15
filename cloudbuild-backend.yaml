@@ -1,0 +1,17 @@
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/agri-backend:v1'
+      - '-f'
+      - 'src/api/Dockerfile'
+      - '.'
+
+# Push the image to Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/agri-backend:v1'
+
+# Optional: timeout after 10 minutes
+timeout: 600s

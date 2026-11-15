@@ -149,7 +149,7 @@ mongosh "mongodb+srv://agri_admin:YOUR_PASSWORD@agri-analytics-cluster.xxxxx.mon
 
 ```bash
 # Set project name
-export PROJECT_ID="agri-analytics-$(date +%s)"
+export PROJECT_ID="dsba-2026"
 echo "Project ID: $PROJECT_ID"
 
 # Create project
@@ -184,26 +184,41 @@ gcloud services list --enabled
 
 ### 3.1 Build and Push Docker Image
 
+**⚠️ IMPORTANT:** Build from the **project root** (not from `src/api`), because the backend needs the `data/processed/india_states_simplified.geojson` file for map rendering.
+
 ```bash
-# Navigate to backend directory
-cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026/src/api
+# Navigate to PROJECT ROOT (not src/api!)
+cd dsba2026
 
 # Set region
 export REGION="us-central1"
 
-# Build image (uses Dockerfile)
-gcloud builds submit \
-  --tag gcr.io/$PROJECT_ID/agri-backend:v1 \
-  .
+# Build image using cloudbuild.yaml
+# This builds from project root with access to both src/api/ and data/
+gcloud builds submit --config=cloudbuild.yaml .
 
 # Verify image
 gcloud container images list
 ```
 
+**What happens during build:**
+- Build context: Project root (includes `src/api/` and `data/processed/`)
+- Dockerfile location: `src/api/Dockerfile`
+- Included files: API code + GeoJSON state boundaries (1.1 MB)
+- `.gcloudignore` excludes: `node_modules`, notebooks, MongoDB backups, raw data (~750MB saved!)
+- Final upload size: ~2-5 MB (vs 926 MB without .gcloudignore!)
+
 ### 3.2 Deploy to Cloud Run
 
+**⚠️ IMPORTANT:** 
+- Use **semicolon (;)** to separate multiple CORS origins (not comma!)
+- Put ALL environment variables in ONE `--set-env-vars` flag
+
 ```bash
-# Deploy backend service
+# Set your frontend URL (update after frontend is deployed)
+export FRONTEND_URL="https://agri-frontend-weju5ycsna-uc.a.run.app"
+
+# Deploy backend service with correct CORS configuration
 gcloud run deploy agri-backend \
   --image gcr.io/$PROJECT_ID/agri-backend:v1 \
   --platform managed \
@@ -211,13 +226,10 @@ gcloud run deploy agri-backend \
   --allow-unauthenticated \
   --port 8080 \
   --memory 512Mi \
-  --cpu 1 \
-  --timeout 120 \
   --min-instances 0 \
   --max-instances 10 \
-  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:YOUR_PASSWORD@agri-analytics-cluster.xxxxx.mongodb.net/agri_analytics" \
-  --set-env-vars "MONGODB_DB_NAME=agri_analytics" \
-  --set-env-vars "CORS_ORIGINS=*"
+  --timeout 120 \
+  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:YOUR_PASSWORD@cluster.xxxxx.mongodb.net/agri_analytics,MONGODB_DB_NAME=agri_analytics,CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
 
 # Get backend URL
 export BACKEND_URL=$(gcloud run services describe agri-backend \
@@ -227,7 +239,10 @@ export BACKEND_URL=$(gcloud run services describe agri-backend \
 echo "✅ Backend deployed at: $BACKEND_URL"
 ```
 
-**Important:** Replace the MongoDB URI with YOUR actual connection string!
+**Replace placeholders:**
+- `YOUR_PASSWORD`: Your actual MongoDB Atlas password
+- `cluster.xxxxx`: Your actual MongoDB cluster name (e.g., `dsba.axklwdl`)
+- `$FRONTEND_URL`: Your actual frontend URL (or update after Step 4)
 
 ### 3.3 Test Backend
 
@@ -247,29 +262,47 @@ curl $BACKEND_URL/api/v1/states | jq '.states | length'
 
 ### 4.1 Update Frontend Environment
 
-```bash
-cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026/frontend
+The frontend needs to know the backend API URL at **build time** (React bakes env vars into the JavaScript bundle).
 
-# Create production environment file
-cat > .env.production << EOF
+```bash
+# Navigate to PROJECT ROOT (not frontend subdirectory)
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
+
+# Update frontend/.env.production with your backend URL
+cat > frontend/.env.production << EOF
 REACT_APP_API_URL=$BACKEND_URL/api/v1
 EOF
 
 # Verify
-cat .env.production
+cat frontend/.env.production
+# Should show: REACT_APP_API_URL=https://agri-backend-xxx.run.app/api/v1
 ```
+
+**Note:** The Dockerfile has a default backend URL, but `.env.production` overrides it.
 
 ### 4.2 Build and Push Frontend Image
 
+**⚠️ IMPORTANT:** Build from project root (like the backend) for consistency!
+
 ```bash
-# Build image
+# Build frontend image using cloudbuild-frontend.yaml
+# MUST provide backend URL via --substitutions
 gcloud builds submit \
-  --tag gcr.io/$PROJECT_ID/agri-frontend:v1 \
+  --config=cloudbuild-frontend.yaml \
+  --substitutions=_BACKEND_URL="$BACKEND_URL" \
   .
+
+# Expected output: "Creating temporary archive of ~30 files totalling ~15 MiB"
+# If you see "76,135 files" or "400+ MiB", node_modules is being uploaded!
 
 # Verify image
 gcloud container images list
 ```
+
+**What happens during build:**
+- Upload size: ~15 MB (with `.gcloudignore`) vs ~400 MB (without)
+- Build time: ~2-3 minutes (with cache) vs ~5-10 minutes (without)
+- `.gcloudignore` excludes: `node_modules/`, `build/`, test files, documentation
 
 ### 4.3 Deploy Frontend to Cloud Run
 
@@ -294,16 +327,21 @@ export FRONTEND_URL=$(gcloud run services describe agri-frontend \
 echo "✅ Frontend deployed at: $FRONTEND_URL"
 ```
 
-### 4.4 Update CORS on Backend
+### 4.4 Update CORS on Backend (if needed)
+
+If you deployed the backend BEFORE knowing the frontend URL, update CORS now:
 
 ```bash
-# Redeploy backend with correct CORS origin
+# Update CORS to include your frontend URL
+# Use semicolon (;) to separate multiple origins
 gcloud run services update agri-backend \
   --region $REGION \
-  --update-env-vars "CORS_ORIGINS=$FRONTEND_URL"
+  --update-env-vars "CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
 
 echo "✅ CORS updated to allow: $FRONTEND_URL"
 ```
+
+**Note:** If you already included `$FRONTEND_URL` in Step 3.2, you can skip this step!
 
 ## 🧪 Step 5: Test Deployment (5 minutes)
 
@@ -403,11 +441,11 @@ gcloud billing budgets create \
 ### Update Backend
 
 ```bash
-cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026/src/api
+# Navigate to PROJECT ROOT (important!)
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
 
-# Build new version
-gcloud builds submit \
-  --tag gcr.io/$PROJECT_ID/agri-backend:v2 \
+# Build new version using cloudbuild.yaml
+gcloud builds submit --config=cloudbuild.yaml .
   .
 
 # Deploy update
