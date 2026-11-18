@@ -29,6 +29,8 @@
     "**/data/features/**": true,
     "**/models/**": true
   },
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda",
 
   // Python formatting
   "[python]": {
