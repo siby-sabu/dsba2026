@@ -168,3 +168,70 @@ async def recommend_crop(payload: RecommendationRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
+
+
+# --- Crop Recommendation Model Integration ---
+import joblib
+import pandas as pd
+from pydantic import BaseModel
+import numpy as np
+
+# Define Request Schema
+class RecommendationRequest(BaseModel):
+    district: str
+    season: str
+    avg_ppt: float
+
+# Load the LightGBM model safely
+MODEL_PATH = Path(__file__).parent.parent.parent.parent / "models" / "crop_rec_v1.pkl"
+model = None
+if MODEL_PATH.exists():
+    try:
+        model = joblib.load(MODEL_PATH)
+    except Exception as e:
+        print(f"Error loading LightGBM model: {e}")
+else:
+    print(f"Warning: LightGBM model not found at {MODEL_PATH}")
+
+@router.post("/insights/recommend")
+async def recommend_crop(payload: RecommendationRequest):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Machine learning recommendation model is currently unavailable.")
+    
+    try:
+        # Format input exactly as expected during model training
+        input_df = pd.DataFrame([{
+            'district': payload.district,
+            'season': payload.season,
+            'avg_ppt': payload.avg_ppt
+        }])
+        
+        # Convert categorical inputs explicitly
+        input_df['district'] = input_df['district'].astype('category')
+        input_df['season'] = input_df['season'].astype('category')
+        
+        # Perform prediction probabilities
+        probabilities = model.predict_proba(input_df)[0]
+        classes = model.classes_
+        
+        # Sort indices descending to get top 2 recommendations
+        top_2_indices = np.argsort(probabilities)[::-1][:2]
+        
+        recommendations = []
+        for idx in top_2_indices:
+            recommendations.append({
+                "crop": str(classes[idx]),
+                "probability": round(float(probabilities[idx]) * 100, 2)
+            })
+            
+        return {
+            "status": "success",
+            "inputs": {
+                "district": payload.district,
+                "season": payload.season,
+                "avg_ppt": payload.avg_ppt
+            },
+            "recommendations": recommendations
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
