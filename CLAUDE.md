@@ -6,9 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **dsba2026** is an M.Tech agricultural analytics project focused on crop yield prediction and optimization for India. The project analyzes 10 years of crop production data (2016-2023) combined with weather and vegetation data to build predictive models and recommendation systems.
 
-**Current Phase:** Moving from planning to Exploratory Data Analysis (EDA)
+**Current Phase:** Production deployment on GCP Cloud Run with React/FastAPI/MongoDB stack
 
-**Tech Stack Expertise:** Strong Python/PySpark/FastAPI background
+**Production URLs:**
+- Frontend: https://agri-frontend-weju5ycsna-uc.a.run.app
+- Backend API: https://agri-backend-weju5ycsna-uc.a.run.app
+- API Docs: https://agri-backend-weju5ycsna-uc.a.run.app/docs
+
+**Tech Stack:**
+- **Backend:** FastAPI + Gunicorn + Uvicorn (Python 3.10)
+- **Frontend:** React 18.2 + Leaflet maps + Axios
+- **Database:** MongoDB Atlas M0 (free tier) - 515 districts, ~156K documents
+- **Deployment:** GCP Cloud Run (serverless containers)
+- **ETL:** PySpark 3.5.0 for data processing
 
 **Key Goals:**
 - Predict crop yields using weather, vegetation indices, and historical data
@@ -216,18 +226,54 @@ python src/models/train_crop_recommender.py \
   --output models/crop_rec_v1.pkl
 ```
 
-### Phase 5: API Development
-```bash
-# Start FastAPI development server
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+### Phase 5: Web Application Development
 
-# API endpoints:
-# GET  /districts             - List all districts
-# GET  /crops                 - List all crops
-# POST /predict/yield         - Predict crop yield
-# POST /recommend/crops       - Recommend crops for location/season
-# GET  /insights/regional     - Regional performance analytics
+**Backend API (FastAPI):**
+```bash
+# Start local backend server
+cd src/api
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# API will be available at:
+# - Health: http://localhost:8000/health
+# - Docs: http://localhost:8000/docs
+# - API Base: http://localhost:8000/api/v1
 ```
+
+**Frontend (React):**
+```bash
+# Install dependencies
+cd frontend
+npm install
+
+# Start development server (requires backend running)
+npm start
+# Opens http://localhost:3000
+
+# Production build
+npm run build
+# Creates optimized bundle in frontend/build/
+```
+
+**MongoDB Setup:**
+```bash
+# Start local MongoDB (macOS)
+brew services start mongodb-community@8.0
+
+# Migrate data to MongoDB
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
+python src/etl/migrate_to_mongodb.py --clean
+
+# Expected: 515 districts + ~100K seasonal_crop_data + 55K monthly_climate
+```
+
+**Key API Endpoints:**
+- `GET /api/v1/states` - List all 26 states
+- `GET /api/v1/districts` - List all 515 districts (filterable by state)
+- `GET /api/v1/districts/{district_id}` - Get specific district details
+- `GET /api/v1/geographic/state-boundaries` - GeoJSON state polygons (simplified)
+- `GET /api/v1/insights/district/{district_id}` - District analytics
+- `GET /api/v1/insights/state/{state}` - State-level insights
 
 ### Testing & Code Quality
 ```bash
@@ -717,11 +763,153 @@ df = df.withColumn('crop_cycle_start_month',
 - Range checks (yield > 0, year between 1997-2023)
 - Referential integrity (all district_ids in dim_geography)
 
+## Web Application Architecture (Production)
+
+### Backend: FastAPI + MongoDB
+
+**3-Tier Architecture:**
+1. **API Layer** (`src/api/main.py`): FastAPI routes with CORS middleware
+2. **Database Layer** (`src/api/database.py`): MongoDB singleton connection pattern
+3. **Router Layer** (`src/api/routers/`): Modular endpoint handlers
+
+**MongoDB Integration:**
+```python
+# Singleton pattern - single MongoClient instance
+class MongoDB:
+    client: MongoClient = None
+    db: Database = None
+    
+    @classmethod
+    def connect(cls):
+        cls.client = MongoClient(settings.MONGODB_URI)
+        cls.db = cls.client[settings.MONGODB_DB_NAME]
+        
+# Usage in routers
+@router.get("/districts")
+async def get_districts(state: Optional[str] = None):
+    collection = MongoDB.get_collection("districts")
+    query = {"state": state} if state else {}
+    return {"districts": list(collection.find(query).limit(1000))}
+```
+
+**Collections Schema:**
+- `districts`: 515 docs with GeoJSON Point geometries (2dsphere index)
+- `seasonal_crop_data`: ~100K docs with embedded climate/vegetation subdocuments
+- `monthly_climate`: 55K docs with time-series precipitation + NDVI data
+- `aggregated_insights`: Pre-computed analytics (materialized views)
+
+**Key Design Patterns:**
+- **Denormalized schema**: Climate/vegetation embedded in crop docs to avoid JOINs
+- **Geospatial indexing**: `db.districts.createIndex({location: "2dsphere"})`
+- **In-memory GeoJSON caching**: 784K boundary points simplified to 10.5K (98.7% reduction)
+- **Batch upserts**: 5K documents per batch during migration
+
+### Frontend: React + Leaflet Maps
+
+**Component Architecture:**
+```
+frontend/src/
+├── App.js                      # Root component with state management
+├── api/client.js               # Axios HTTP client (15s timeout)
+├── components/
+│   ├── map/IndiaMap.js        # Leaflet MapContainer with 2 layers
+│   ├── panels/StatePanel.js   # State selection UI
+│   ├── cards/DistrictCard.js  # District details card
+│   └── filters/FilterPanel.js # Year/crop/season filters
+└── utils/loadGeoJSON.js        # GeoJSON loading utility
+```
+
+**Map Rendering Strategy (Two-Layer):**
+1. **Layer 1: State Boundaries** - `<GeoJSON>` component with simplified polygons
+   - Fetches from `/api/v1/geographic/state-boundaries`
+   - Dynamic styling based on selection state
+   - Click handlers for state selection
+2. **Layer 2: District Centroids** - 515 `<CircleMarker>` components
+   - Colored by state selection: `#6b5d4f` (selected) → `#a89984` (default)
+   - Conditional click logic: opens state panel first, then district details
+
+**API Client Configuration:**
+```javascript
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
+const client = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 15000,
+  headers: {'Content-Type': 'application/json'}
+});
+```
+
+**Build-time Environment Variables:**
+- `.env.production`: `REACT_APP_API_URL=https://agri-backend-xxx.run.app/api/v1`
+- Baked into bundle during `npm run build` via webpack
+
+### GCP Cloud Run Deployment
+
+**Backend Deployment:**
+```bash
+# Build from PROJECT ROOT (not src/api!) to include GeoJSON file
+cd /Users/a0488240/Documents/Learning/MTech/project/dsba2026
+gcloud builds submit --config=cloudbuild.yaml .
+
+# Deploy with environment variables
+gcloud run deploy agri-backend \
+  --image gcr.io/dsba-2026/agri-backend:v1 \
+  --region us-central1 \
+  --memory 512Mi \
+  --port 8080 \
+  --set-env-vars "MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/agri_analytics,MONGODB_DB_NAME=agri_analytics,CORS_ORIGINS=http://localhost:3000;https://agri-frontend-weju5ycsna-uc.a.run.app"
+```
+
+**Frontend Deployment:**
+```bash
+# Update .env.production with backend URL FIRST
+cat > frontend/.env.production << EOF
+REACT_APP_API_URL=https://agri-backend-weju5ycsna-uc.a.run.app/api/v1
+EOF
+
+# Build and deploy
+gcloud builds submit --config=cloudbuild-frontend.yaml --substitutions=_BACKEND_URL="$BACKEND_URL" .
+gcloud run deploy agri-frontend --image gcr.io/dsba-2026/agri-frontend:v1 --region us-central1
+```
+
+**CRITICAL: CORS Configuration**
+After deploying frontend, MUST update backend CORS (Step 4.4 in deployment guide):
+```bash
+export FRONTEND_URL="https://agri-frontend-weju5ycsna-uc.a.run.app"
+gcloud run services update agri-backend \
+  --region us-central1 \
+  --update-env-vars "CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
+```
+**Why:** Browser blocks cross-origin requests without proper CORS headers. Use semicolon (;) not comma to separate origins!
+
+**Deployment Architecture:**
+- **Backend:** Gunicorn (2 workers) + Uvicorn worker class, 0-10 instances, 512Mi memory
+- **Frontend:** Nginx serving static React build, 0-5 instances, 256Mi memory
+- **Database:** MongoDB Atlas M0 free tier (512MB, shared vCPU)
+- **Cost:** ~$13/month (backend $10, frontend $3, MongoDB $0)
+
+**Monitoring:**
+```bash
+# View logs
+gcloud logging read "resource.labels.service_name=agri-backend" --limit=50
+
+# Check service status
+gcloud run services describe agri-backend --region us-central1
+
+# Test endpoints
+curl https://agri-backend-weju5ycsna-uc.a.run.app/health
+```
+
+**Reference Documentation:**
+- Full deployment guide: `docs/GCP_DEPLOYMENT_GUIDE.md`
+- Troubleshooting CORS/503 errors: `docs/TROUBLESHOOTING.md`
+- Web app local setup: `docs/README_WEB_APP.md`
+
 ## Git Workflow
 
 **Branches:**
 - `main` - Stable, working code
-- `siby-analysis` - Current analysis work (active)
+- `siby-analysis` - Siby's analysis work
+- `allu_analysis` - Allu's analysis work (current)
 - Feature branches: `feature/etl-pipeline`, `feature/yield-model`
 
 **Before Committing:**
