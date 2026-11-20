@@ -414,15 +414,15 @@ These seven figures collectively validate our design decisions: heterogeneous da
 \subsection{Achievement of Goals}
 We successfully achieved 4 of 5 design goals, demonstrating \textit{impact} through production deployment:
 
-\textbf{$\checkmark$ Data Volume:} ETL pipeline processes 455K records with \textbf{[TBD]}-minute runtime, meeting <30-minute target. Parquet compression achieved 10.2x reduction, enabling efficient storage and query acceleration.
+\textbf{[PASS] Data Volume:} ETL pipeline processes 455K records with \textbf{[TBD]}-minute runtime, meeting <30-minute target. Parquet compression achieved 10.2x reduction, enabling efficient storage and query acceleration.
 
-\textbf{$\checkmark$ Heterogeneity:} Integrated four data modalities with automated district name standardization (fuzzy matching resolved 127 conflicts). Validation rules prevented silent join failures, ensuring data quality.
+\textbf{[PASS] Heterogeneity:} Integrated four data modalities with automated district name standardization (fuzzy matching resolved 127 conflicts). Validation rules prevented silent join failures, ensuring data quality.
 
 \textbf{Partially Achieved — Prediction Accuracy:} Model achieved R²=\textbf{[TBD]} on 2023 test set, with \textbf{[TBD]}\% improvement over baseline. Per-crop stratification revealed high confidence for major crops (rice, wheat) but challenges with pulses/spices. Spatial cross-validation uncovered overfitting in low-data states (Sikkim, Goa), indicating need for transfer learning from similar agro-ecological zones.
 
-\textbf{$\checkmark$ Query Performance:} MongoDB queries achieved P95 latency <\textbf{[TBD]}ms, API response times <\textbf{[TBD]}ms, frontend load <\textbf{[TBD]}ms—all meeting targets. Denormalized schema design validated through performance benchmarks.
+\textbf{[PASS] Query Performance:} MongoDB queries achieved P95 latency <\textbf{[TBD]}ms, API response times <\textbf{[TBD]}ms, frontend load <\textbf{[TBD]}ms—all meeting targets. Denormalized schema design validated through performance benchmarks.
 
-\textbf{$\checkmark$ Production Deployment:} Successfully deployed to GCP Cloud Run with autoscaling (0-10 instances), achieving \$12.80/month cost at prototype scale. Public URLs accessible: Frontend at \url{https://agri-frontend-weju5ycsna-uc.a.run.app}, Backend at \url{https://agri-backend-weju5ycsna-uc.a.run.app/docs}, demonstrating production readiness.
+\textbf{[PASS] Production Deployment:} Successfully deployed to GCP Cloud Run with autoscaling (0-10 instances), achieving \$12.80/month cost at prototype scale. Public URLs accessible: Frontend at \url{https://agri-frontend-weju5ycsna-uc.a.run.app}, Backend at \url{https://agri-backend-weju5ycsna-uc.a.run.app/docs}, demonstrating production readiness.
 
 \textbf{Limitations:} MongoDB M0 free tier (512MB) approaching capacity at 169K documents. Estimated 718-district national scale (515 current + 203 remaining) would require 237K documents, exceeding limit. Requires upgrade to M2 tier (\$9/month) or data archival strategy for older years.
 
