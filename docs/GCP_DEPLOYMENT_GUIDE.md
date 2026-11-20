@@ -213,12 +213,10 @@ gcloud container images list
 **⚠️ IMPORTANT:** 
 - Use **semicolon (;)** to separate multiple CORS origins (not comma!)
 - Put ALL environment variables in ONE `--set-env-vars` flag
+- **You MUST update CORS after deploying the frontend (Step 4.4) - don't skip it!**
 
 ```bash
-# Set your frontend URL (update after frontend is deployed)
-export FRONTEND_URL="https://agri-frontend-weju5ycsna-uc.a.run.app"
-
-# Deploy backend service with correct CORS configuration
+# Deploy backend service with localhost CORS only (will update in Step 4.4)
 gcloud run deploy agri-backend \
   --image gcr.io/$PROJECT_ID/agri-backend:v1 \
   --platform managed \
@@ -229,7 +227,7 @@ gcloud run deploy agri-backend \
   --min-instances 0 \
   --max-instances 10 \
   --timeout 120 \
-  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:YOUR_PASSWORD@cluster.xxxxx.mongodb.net/agri_analytics,MONGODB_DB_NAME=agri_analytics,CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
+  --set-env-vars "MONGODB_URI=mongodb+srv://agri_admin:YOUR_PASSWORD@cluster.xxxxx.mongodb.net/agri_analytics,MONGODB_DB_NAME=agri_analytics,CORS_ORIGINS=http://localhost:3000"
 
 # Get backend URL
 export BACKEND_URL=$(gcloud run services describe agri-backend \
@@ -237,12 +235,16 @@ export BACKEND_URL=$(gcloud run services describe agri-backend \
   --format 'value(status.url)')
 
 echo "✅ Backend deployed at: $BACKEND_URL"
+echo "⚠️  REMEMBER: Update CORS in Step 4.4 after deploying frontend!"
 ```
 
 **Replace placeholders:**
 - `YOUR_PASSWORD`: Your actual MongoDB Atlas password
 - `cluster.xxxxx`: Your actual MongoDB cluster name (e.g., `dsba.axklwdl`)
-- `$FRONTEND_URL`: Your actual frontend URL (or update after Step 4)
+
+**Why localhost-only CORS first?**
+- Frontend isn't deployed yet, so we don't know its URL
+- We'll add the frontend URL in Step 4.4 (REQUIRED step!)
 
 ### 3.3 Test Backend
 
@@ -327,9 +329,9 @@ export FRONTEND_URL=$(gcloud run services describe agri-frontend \
 echo "✅ Frontend deployed at: $FRONTEND_URL"
 ```
 
-### 4.4 Update CORS on Backend (if needed)
+### 4.4 Update CORS on Backend (REQUIRED! ⚠️)
 
-If you deployed the backend BEFORE knowing the frontend URL, update CORS now:
+**🚨 DO NOT SKIP THIS STEP!** Without this, your frontend will show CORS errors and fail to load data.
 
 ```bash
 # Update CORS to include your frontend URL
@@ -339,9 +341,30 @@ gcloud run services update agri-backend \
   --update-env-vars "CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
 
 echo "✅ CORS updated to allow: $FRONTEND_URL"
+
+# Verify the update was applied
+echo "Verifying CORS configuration..."
+gcloud run services describe agri-backend \
+  --region $REGION \
+  --format="value(spec.template.spec.containers[0].env)" | grep CORS_ORIGINS
+
+# Test CORS headers
+echo "Testing CORS headers..."
+curl -H "Origin: $FRONTEND_URL" \
+  -H "Access-Control-Request-Method: GET" \
+  -X OPTIONS \
+  $BACKEND_URL/api/v1/states -v 2>&1 | grep -i "access-control-allow-origin"
 ```
 
-**Note:** If you already included `$FRONTEND_URL` in Step 3.2, you can skip this step!
+**Expected output from CORS test:**
+```
+< access-control-allow-origin: https://agri-frontend-weju5ycsna-uc.a.run.app
+```
+
+**Common mistake:** Forgetting this step causes the error:
+```
+Origin https://agri-frontend-xxx.run.app is not allowed by Access-Control-Allow-Origin
+```
 
 ## 🧪 Step 5: Test Deployment (5 minutes)
 
@@ -514,15 +537,34 @@ gcloud run services update agri-backend \
 
 ### Issue 2: CORS errors in browser
 
-**Symptom:** Frontend can't connect to backend
+**Symptoms:**
+- Browser console shows: `Origin https://agri-frontend-xxx.run.app is not allowed by Access-Control-Allow-Origin`
+- Frontend shows: "Failed to load data" or "Network Error"
+- API returns 200 OK but browser blocks the response
+
+**Root cause:** You skipped Step 4.4 or the CORS_ORIGINS environment variable doesn't include your frontend URL.
 
 **Fix:**
 ```bash
-# Update CORS to allow frontend
+# Set frontend URL
+export FRONTEND_URL="https://agri-frontend-weju5ycsna-uc.a.run.app"
+
+# Update CORS to allow frontend (use semicolon separator!)
 gcloud run services update agri-backend \
   --region $REGION \
-  --update-env-vars "CORS_ORIGINS=$FRONTEND_URL"
+  --update-env-vars "CORS_ORIGINS=http://localhost:3000;$FRONTEND_URL"
+
+# Verify it worked
+gcloud run services describe agri-backend \
+  --region $REGION \
+  --format="value(spec.template.spec.containers[0].env)" | grep CORS_ORIGINS
+
+# Should output: CORS_ORIGINS=http://localhost:3000;https://agri-frontend-xxx.run.app
 ```
+
+**Important:** 
+- Use **semicolon (;)** not comma to separate origins
+- Include both `http://localhost:3000` (for local testing) AND your production frontend URL
 
 ### Issue 3: Frontend shows blank page
 
@@ -574,7 +616,7 @@ gcloud run services update agri-backend \
 |----------|-------|-------------|
 | `MONGODB_URI` | `mongodb+srv://...` | MongoDB Atlas connection string |
 | `MONGODB_DB_NAME` | `agri_analytics` | Database name |
-| `CORS_ORIGINS` | `https://agri-frontend-xyz.run.app` | Allowed frontend origins |
+| `CORS_ORIGINS` | `http://localhost:3000;https://agri-frontend-xyz.run.app` | Allowed frontend origins (semicolon-separated!) |
 
 ### Frontend (.env.production)
 
@@ -602,9 +644,11 @@ gcloud run services update agri-backend \
 - [ ] `.env.production` created with backend URL
 - [ ] Frontend Docker image built and pushed
 - [ ] Frontend service deployed to Cloud Run
-- [ ] CORS updated on backend
-- [ ] Frontend loads in browser
+- [ ] **🚨 CORS updated on backend (Step 4.4) - CRITICAL!**
+- [ ] CORS verification test passed (see Step 4.4)
+- [ ] Frontend loads in browser without CORS errors
 - [ ] State clicks work, district details load
+- [ ] No "Network Error" or "Failed to load data" messages
 
 **Monitoring:**
 - [ ] Billing alert created
